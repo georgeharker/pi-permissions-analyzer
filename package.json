@@ -1,7 +1,7 @@
 {
-  "name": "@geohar/review-probe",
+  "name": "@geohar/pi-permissions-analyzer",
   "version": "0.1.0",
-  "description": "Pi extension: probe tester for pi-permission-auto-review. Dry-run or call the classifier to validate additionalPolicy rules.",
+  "description": "Pi extension: analyze and probe the pi-permission-auto-review classifier. Dry-run or call the model to validate additionalPolicy rules and inspect prompt construction.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -37,13 +37,15 @@
     "permission-review",
     "auto-review",
     "probe",
-    "classifier"
+    "classifier",
+    "analyzer",
+    "permissions-analyzer"
   ],
   "author": "George Harker <george@georgeharker.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/geohar/review-probe.git"
+    "url": "git+https://github.com/geohar/pi-permissions-analyzer.git"
   },
   "publishConfig": {
     "access": "public"

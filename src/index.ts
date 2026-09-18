@@ -1,14 +1,14 @@
 /**
- * @geohar/review-probe — Standalone probe tester for pi-permission-auto-review.
+ * @geohar/pi-permissions-analyzer — Analyze and probe the pi-permission-auto-review classifier.
  *
  * Lets you test the classifier in isolation by:
  *   1. Building the exact prompt the reviewer would send (dry run)
  *   2. Calling the configured model with that prompt and showing the verdict
  *
  * Usage (inside pi):
- *   /review-probe dry                     — dump the system + user prompt without calling the model
- *   /review-probe call                    — call the model and show the verdict
- *   /review-probe call --scenario <json>  — override permission details with a custom scenario
+ *   /permissions-analyzer dry                     — dump the system + user prompt without calling the model
+ *   /permissions-analyzer call                    — call the model and show the verdict
+ *   /permissions-analyzer call --scenario <json>  — override permission details with a custom scenario
  *
  * The probe reads your existing auto-review config, builds the real transcript
  * from the current session, and constructs the exact prompt the reviewer uses.
@@ -87,8 +87,8 @@ function parseScenarioArg(parts: string[]): Record<string, unknown> {
 }
 
 export default function reviewProbe(pi: ExtensionAPI): void {
-  pi.registerCommand('review-probe', {
-    description: 'Test the auto-review classifier in isolation: dry | call [--scenario JSON]',
+  pi.registerCommand('permissions-analyzer', {
+    description: 'Analyze the auto-review classifier in isolation: dry | call [--scenario JSON]',
     handler: async (args, ctx) => {
       const parts = (args ?? '').trim().split(/\s+/)
       const subcommand = parts[0] ?? 'dry'
@@ -104,7 +104,7 @@ export default function reviewProbe(pi: ExtensionAPI): void {
       if (subcommand === 'dry') {
         const output = [
           `╔══════════════════════════════════════════════════════╗`,
-          `║  REVIEW PROBE — DRY RUN                              ║`,
+          `║  PERMISSIONS ANALYZER — DRY RUN                       ║`,
           `╚══════════════════════════════════════════════════════╝`,
           ``,
           `Config: provider=${config.provider} model=${config.model} reasoning=${config.reasoning}`,
@@ -120,7 +120,7 @@ export default function reviewProbe(pi: ExtensionAPI): void {
           `─── USER PROMPT (${userPrompt.length} chars, ~${approximateTokens(userPrompt)} tokens) ───`,
           userPrompt,
         ]
-        ctx.ui.setWidget('review-probe', output)
+        ctx.ui.setWidget('permissions-analyzer', output)
         ctx.ui.notify('Dry run complete — see widget above', 'info')
         return
       }
@@ -142,7 +142,7 @@ export default function reviewProbe(pi: ExtensionAPI): void {
           return
         }
 
-        ctx.ui.setStatus('review-probe', 'Calling reviewer model...')
+        ctx.ui.setStatus('permissions-analyzer', 'Calling reviewer model...')
 
         try {
           const streamOpts: SimpleStreamOptions = {
@@ -175,7 +175,7 @@ export default function reviewProbe(pi: ExtensionAPI): void {
 
           const output = [
             `╔══════════════════════════════════════════════════════╗`,
-            `║  REVIEW PROBE — LIVE CALL                            ║`,
+            `║  PERMISSIONS ANALYZER — LIVE CALL                     ║`,
             `╚══════════════════════════════════════════════════════╝`,
             ``,
             `Config: provider=${config.provider} model=${config.model} reasoning=${config.reasoning}`,
@@ -191,11 +191,11 @@ export default function reviewProbe(pi: ExtensionAPI): void {
             JSON.stringify(details, null, 2),
           ]
 
-          ctx.ui.setWidget('review-probe', output)
-          ctx.ui.setStatus('review-probe', '')
+          ctx.ui.setWidget('permissions-analyzer', output)
+          ctx.ui.setStatus('permissions-analyzer', '')
           ctx.ui.notify(`Probe result: ${verdict['outcome'] ?? 'unknown'}`, 'info')
         } catch (err) {
-          ctx.ui.setStatus('review-probe', '')
+          ctx.ui.setStatus('permissions-analyzer', '')
           ctx.ui.notify(`Probe failed: ${err instanceof Error ? err.message : String(err)}`, 'error')
         }
         return
@@ -206,13 +206,13 @@ export default function reviewProbe(pi: ExtensionAPI): void {
   })
 
   pi.registerTool({
-    name: 'review_probe',
-    label: 'Review Probe',
+    name: 'permissions_analyzer',
+    label: 'Permissions Analyzer',
     description:
-      'Test the pi-permission-auto-review classifier. Returns the prompt it would receive (dry) or calls the model and returns the verdict (call). Use to validate how additionalPolicy rules affect decisions.',
-    promptSnippet: 'Probe the permission reviewer with dry or call mode',
+      'Analyze the pi-permission-auto-review classifier. Returns the prompt it would receive (dry) or calls the model and returns the verdict (call). Use to validate how additionalPolicy rules affect decisions.',
+    promptSnippet: 'Analyze the permission reviewer with dry or call mode',
     promptGuidelines: [
-      'Use review_probe to test how the auto-review classifier would judge a permission request.',
+      'Use permissions_analyzer to test how the auto-review classifier would judge a permission request.',
       'Use mode="dry" to inspect the prompt without model cost, mode="call" to get an actual verdict.',
     ],
     parameters: Type.Object({

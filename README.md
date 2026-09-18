@@ -1,6 +1,6 @@
-# @geohar/review-probe
+# @geohar/pi-permissions-analyzer
 
-A [Pi](https://github.com/earendil-works/pi) extension that probes the [`@mzwing/pi-permission-auto-review`](https://github.com/mzwing/pi-packages/tree/main/packages/pi-permission-auto-review) classifier in isolation — for validating `additionalPolicy` rules, inspecting prompt construction, and testing model verdicts without going through the full permission gate.
+A [Pi](https://github.com/earendil-works/pi) extension that analyzes and probes the [`@mzwing/pi-permission-auto-review`](https://github.com/mzwing/pi-packages/tree/main/packages/pi-permission-auto-review) classifier in isolation — for validating `additionalPolicy` rules, inspecting prompt construction, and testing model verdicts without going through the full permission gate.
 
 ## What it does
 
@@ -13,53 +13,53 @@ The auto-review extension sends a carefully constructed prompt (system policy + 
 ## Install
 
 ```bash
-pi install npm:@geohar/review-probe
+pi install npm:@geohar/pi-permissions-analyzer
 ```
 
-Requires `pi-permission-auto-review` to be installed and configured (the probe reads its config).
+Requires `pi-permission-auto-review` to be installed and configured (the analyzer reads its config).
 
 ## Usage
 
-### Command: `/review-probe`
+### Command: `/permissions-analyzer`
 
 ```
-/review-probe dry                     — dump the system + user prompt without calling the model
-/review-probe call                    — call the model and show the verdict
-/review-probe call --scenario <json>  — override permission details with a custom scenario
+/permissions-analyzer dry                     — dump the system + user prompt without calling the model
+/permissions-analyzer call                    — call the model and show the verdict
+/permissions-analyzer call --scenario <json>  — override permission details with a custom scenario
 ```
 
 #### Examples
 
 ```bash
 # Dry run: inspect what the classifier would see
-/review-probe dry
+/permissions-analyzer dry
 
 # Live call: get a real verdict from the configured model
-/review-probe call
+/permissions-analyzer call
 
 # Test your additionalPolicy against a specific command
-/review-probe call --scenario {"command":"cat ~/.cache/secrets/key","surface":"bash"}
+/permissions-analyzer call --scenario {"command":"cat ~/.cache/secrets/key","surface":"bash"}
 
 # Test env var reading (your "request clarification" rule)
-/review-probe call --scenario {"command":"echo $AWS_SECRET_ACCESS_KEY","surface":"bash"}
+/permissions-analyzer call --scenario {"command":"echo $AWS_SECRET_ACCESS_KEY","surface":"bash"}
 
 # Test a destructive operation
-/review-probe call --scenario {"command":"rm -rf /tmp/build","surface":"bash"}
+/permissions-analyzer call --scenario {"command":"rm -rf /tmp/build","surface":"bash"}
 ```
 
-### Tool: `review_probe`
+### Tool: `permissions_analyzer`
 
 The extension also registers an LLM-callable tool so the agent itself can run probes:
 
 ```
-review_probe(mode="dry")                      — dump prompts
-review_probe(mode="call")                     — call the model
-review_probe(mode="call", scenario={"command":"cat ~/.cache/secrets/key","surface":"bash"})
+permissions_analyzer(mode="dry")                      — dump prompts
+permissions_analyzer(mode="call")                     — call the model
+permissions_analyzer(mode="call", scenario={"command":"cat ~/.cache/secrets/key","surface":"bash"})
 ```
 
 ## How it works
 
-The probe:
+The analyzer:
 
 1. Reads the auto-review config (`~/.pi/agent/extensions/pi-permission-auto-review/config.json` or project override) to get the same provider, model, reasoning, and policy the reviewer uses.
 2. Builds the transcript from the current session using the same rendering, truncation, and budget logic as `pi-permission-auto-review`'s `renderTranscript()`.
@@ -83,7 +83,7 @@ Key scenarios to probe:
 
 ## Config
 
-The probe reads your existing `pi-permission-auto-review` config. No separate configuration is needed.
+The analyzer reads your existing `pi-permission-auto-review` config. No separate configuration is needed.
 
 ## Diagnostics
 
