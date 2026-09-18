@@ -1,0 +1,66 @@
+{
+  "name": "@geohar/review-probe",
+  "version": "0.1.0",
+  "description": "Pi extension: probe tester for pi-permission-auto-review. Dry-run or call the classifier to validate additionalPolicy rules.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "pi-coding-agent",
+    "permission-review",
+    "auto-review",
+    "probe",
+    "classifier"
+  ],
+  "author": "George Harker <george@georgeharker.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/geohar/review-probe.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.84.0",
+    "@earendil-works/pi-coding-agent": ">=0.84.0",
+    "typebox": "^1.1.0"
+  }
+}
