@@ -27,9 +27,7 @@ import { homedir } from 'node:os'
 import { getPermissionsService, PERMISSIONS_READY_CHANNEL } from '@gotgenes/pi-permission-system'
 import type { PermissionCheckResult, PermissionsReadyEvent } from '@gotgenes/pi-permission-system'
 import { loadAutoReviewConfig } from './config.js'
-import { buildReviewPrompt, type PermissionDetails } from './prompt.js'
-import { parseReviewAssessment } from './verdict.js'
-import { renderTranscript } from './transcript.js'
+import { buildReviewPrompt, renderTranscript, parseReviewAssessment, type PermissionDetails } from './review-api.js'
 import { getLogSummary, getRecentDecisions, getRecentResolutions, formatTimestamp, DEFAULT_LOG_PATH } from './log.js'
 
 function approximateTokens(text: string): number {
@@ -58,6 +56,35 @@ const DEFAULT_SCENARIO: PermissionDetails = {
   toolName: 'bash',
   command: 'echo $HOME',
   surface: 'bash',
+}
+
+/** Build a fully consistent PermissionDetails from DEFAULT_SCENARIO + overrides.
+ * Patches nested payload.request/evidence to match the top-level command/surface/value
+ * so the reviewer model never sees a stale "echo $HOME" evidence mismatch. */
+function buildDetails(overrides: Record<string, unknown>): PermissionDetails {
+  const details: PermissionDetails = { ...DEFAULT_SCENARIO, ...overrides }
+  const command = typeof details.command === 'string' ? details.command : ''
+  const surface = typeof details.surface === 'string' ? details.surface : 'bash'
+  const value = typeof details.value === 'string' ? details.value : command
+
+  // Patch nested payload to stay consistent
+  if (details.payload && typeof details.payload === 'object') {
+    const payload = details.payload as Record<string, unknown>
+    if (payload.request && typeof payload.request === 'object') {
+      const req = payload.request as Record<string, unknown>
+      req.surface = surface
+      req.value = value
+      req.toolName = typeof details.toolName === 'string' ? details.toolName : surface
+    }
+    if (Array.isArray(payload.evidence) && payload.evidence.length > 0) {
+      payload.evidence = [{ label: 'command', text: command, detail: null }]
+    }
+  }
+
+  // Ensure top-level value matches command if not explicitly set
+  if (!overrides.value) details.value = value
+
+  return details
 }
 
 async function callModel(
@@ -315,7 +342,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
         scenarioSource = picked.source
       }
 
-      const details: PermissionDetails = { ...DEFAULT_SCENARIO, ...scenarioOverrides }
+      const details = buildDetails(scenarioOverrides)
 
       const branch = ctx.sessionManager.getBranch()
       const transcript = renderTranscript(branch)
@@ -496,7 +523,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
 
       if (subcommand === 'scenario') {
         const overrides = parseScenarioArg(parts)
-        const scenario: PermissionDetails = { ...DEFAULT_SCENARIO, ...overrides }
+        const scenario = buildDetails(overrides)
         const output = [
           '╔══════════════════════════════════════════════════════╗',
           '║  PERMISSIONS ANALYZER — SCENARIO                     ║',
@@ -623,7 +650,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
       const config = loadAutoReviewConfig(ctx.cwd)
       const branch = ctx.sessionManager.getBranch()
       const transcript = renderTranscript(branch)
-      const details: PermissionDetails = { ...DEFAULT_SCENARIO, ...params.scenario }
+      const details = buildDetails(params.scenario as Record<string, unknown>)
       const { systemPrompt, userPrompt } = buildReviewPrompt(config, transcript, details)
 
       // Query live permission system
