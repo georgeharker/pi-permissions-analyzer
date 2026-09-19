@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { buildReviewPrompt, buildSystemPrompt } from '../src/prompt.js'
+import { buildReviewPrompt, buildSystemPrompt } from '../src/review-api.js'
 import { loadAutoReviewConfig, DEFAULT_CONFIG } from '../src/config.js'
-import type { AutoReviewConfig } from '../src/config.js'
+import type { AutoReviewConfig } from '../src/review-api.js'
 
 describe('buildSystemPrompt', () => {
   it('includes the review protocol', () => {
     const prompt = buildSystemPrompt(DEFAULT_CONFIG)
     expect(prompt).toContain('read-only automatic permission reviewer')
-    expect(prompt).toContain('Baseline Guardian policy included')
+    // v0.4.0+ inlines the full Guardian policy; earlier versions said 'Baseline Guardian policy included'
+    const hasBaseline = prompt.includes('Baseline Guardian policy included') || prompt.includes('# Security Policy')
+    expect(hasBaseline).toBe(true)
   })
 
   it('includes additionalPolicy as Operator Policy', () => {

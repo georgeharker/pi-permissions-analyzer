@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseReviewAssessment } from '../src/verdict.js'
+import { parseReviewAssessment } from '../src/review-api.js'
 
 describe('parseReviewAssessment', () => {
   it('accepts the compact Codex allow response', () => {

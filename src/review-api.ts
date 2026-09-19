@@ -1,17 +1,21 @@
 /**
- * Review API shim — re-exports prompt/transcript/verdict logic.
+ * Review API — imports from @mzwing/pi-permission-auto-review/review.
  *
- * Currently inlined from @mzwing/pi-permission-auto-review because the package
- * does not yet export these internals. When https://github.com/mzwing/pi-packages/issues/14
- * is resolved, flip the import source below from "./inlined/*" to the package.
- *
- * TO SWITCH (after mzwing exports internals):
- *   1. Change each import below from './inlined/*.js' to '@mzwing/pi-permission-auto-review'
- *   2. Delete the inlined source files (transcript.ts, prompt.ts, policy.ts, verdict.ts)
- *   3. Remove this shim — import directly from @mzwing in index.ts
+ * Mzwing exported the internals as of v0.4.0 (see mzwing/pi-packages#14).
+ * No more inlined copies — we use the exact same logic the live reviewer uses.
  */
 
-export { renderTranscript, type RenderedTranscript, type TranscriptStats } from './transcript.js'
-export { buildReviewPrompt, buildSystemPrompt, type ReviewPrompt, type PermissionDetails } from './prompt.js'
-export { FIXED_REVIEW_PROTOCOL } from './policy.js'
-export { parseReviewAssessment, type ReviewAssessment, type RiskLevel, type UserAuthorization } from './verdict.js'
+export {
+  renderTranscript,
+  buildReviewPrompt,
+  buildSystemPrompt,
+  parseReviewAssessment,
+  FIXED_REVIEW_PROTOCOL,
+  type AutoReviewConfig,
+  type RenderedTranscript,
+  type ReviewPrompt,
+  type ReviewAssessment,
+} from '@mzwing/pi-permission-auto-review/review'
+
+// The permission details type lives in pi-permission-system
+export type { PromptPermissionDetails as PermissionDetails } from '@gotgenes/pi-permission-system'

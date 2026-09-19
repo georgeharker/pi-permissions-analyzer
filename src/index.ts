@@ -69,7 +69,8 @@ function buildDetails(overrides: Record<string, unknown>): PermissionDetails {
 
   // Patch nested payload to stay consistent
   if (details.payload && typeof details.payload === 'object') {
-    const payload = details.payload as Record<string, unknown>
+    // SAFETY: PromptPayload is a JSON-compatible object; we only write primitive values into known keys
+    const payload = details.payload as unknown as Record<string, unknown>
     if (payload.request && typeof payload.request === 'object') {
       const req = payload.request as Record<string, unknown>
       req.surface = surface
