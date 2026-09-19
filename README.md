@@ -1,6 +1,6 @@
 # @geohar/pi-permissions-analyzer
 
-A [Pi](https://github.com/earendil-works/pi) extension that analyzes and probes the [`@mzwing/pi-permission-auto-review`](https://github.com/mzwing/pi-packages/tree/main/packages/pi-permission-auto-review) classifier in isolation — for validating `additionalPolicy` rules, inspecting prompt construction, and testing model verdicts without going through the full permission gate.
+A [Pi](https://github.com/earendil-works/pi) extension that analyzes and probes the [`@mzwing/pi-permission-auto-review`](https://github.com/mzwing/pi-packages/tree/master/packages/pi-permission-auto-review) classifier in isolation — for validating `additionalPolicy` rules, inspecting prompt construction, and testing model verdicts without going through the full permission gate.
 
 ## What it does
 
