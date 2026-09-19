@@ -26,7 +26,7 @@ import { Type } from 'typebox'
 import { homedir } from 'node:os'
 import { getPermissionsService, PERMISSIONS_READY_CHANNEL } from '@gotgenes/pi-permission-system'
 import type { PermissionCheckResult, PermissionsReadyEvent } from '@gotgenes/pi-permission-system'
-import { loadAutoReviewConfig } from './config.js'
+import { loadAutoReviewConfig, DEFAULT_CONFIG } from './config.js'
 import { buildReviewPrompt, renderTranscript, parseReviewAssessment, type PermissionDetails } from './review-api.js'
 import { getLogSummary, getRecentDecisions, getRecentResolutions, formatTimestamp, DEFAULT_LOG_PATH } from './log.js'
 
@@ -311,6 +311,8 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
   // The service is session-keyed: one Pi process hosts several nodes
   // (root session + in-process subagents), each publishing under its own ID.
   let sessionId: string | undefined
+  let permissionsSystemReady = false
+  let startupWarnings: string[] = []
 
   pi.events.on(PERMISSIONS_READY_CHANNEL, (data: unknown) => {
     const ready = data as PermissionsReadyEvent | undefined
@@ -318,11 +320,36 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
     if (id != null) {
       // Learn-once: ready repeats, so this is not last-writer-wins.
       sessionId ??= id
+      permissionsSystemReady = true
     }
+  })
+
+  pi.on('session_start', () => {
+    // Deferred check: warn after a short delay so other extensions have time to load
+    setTimeout(() => {
+      const warnings: string[] = []
+
+      if (!permissionsSystemReady) {
+        warnings.push('@gotgenes/pi-permission-system is not running — deterministic rule checks will be unavailable')
+      }
+
+      const config = loadAutoReviewConfig(process.cwd())
+      if (config.provider === DEFAULT_CONFIG.provider && config.model === DEFAULT_CONFIG.model) {
+        // Config still at defaults — the auto-review extension may not be installed/configured
+        warnings.push('Auto-review config is at defaults (openai-codex/codex-auto-review) — is @mzwing/pi-permission-auto-review installed and configured?')
+      }
+
+      // Store warnings to surface when user runs a command
+      if (warnings.length > 0) {
+        startupWarnings = warnings
+      }
+    }, 3000)
   })
 
   pi.on('session_shutdown', () => {
     sessionId = undefined
+    permissionsSystemReady = false
+    startupWarnings = []
   })
 
   pi.registerCommand('permissions-analyzer', {
@@ -331,6 +358,11 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
       const parts = (args ?? '').trim().split(/\s+/)
       const subcommand = parts[0] ?? 'help'
       const config = loadAutoReviewConfig(ctx.cwd)
+
+      // Surface startup warnings if any
+      if (startupWarnings.length > 0 && (subcommand === 'help' || subcommand === 'dry' || subcommand === 'call')) {
+        ctx.ui.notify(`⚠ permissions-analyzer: ${startupWarnings.join('; ')}`, 'warning')
+      }
 
       // For dry/call, resolve the scenario: CLI --scenario > TUI picker > cancel
       let scenarioOverrides = parseScenarioArg(parts)
