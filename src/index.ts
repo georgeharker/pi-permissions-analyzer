@@ -204,8 +204,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
           `─── USER PROMPT (${userPrompt.length} chars, ~${approximateTokens(userPrompt)} tokens) ───`,
           userPrompt,
         ]
-        ctx.ui.setWidget('permissions-analyzer', output)
-        ctx.ui.notify('Dry run complete — see widget above', 'info')
+        ctx.ui.notify(output.join('\n'), 'info')
         return
       }
 
@@ -277,9 +276,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
             JSON.stringify(details, null, 2),
           ]
 
-          ctx.ui.setWidget('permissions-analyzer', output)
-          ctx.ui.setStatus('permissions-analyzer', '')
-          ctx.ui.notify(`Probe result: ${verdict['outcome'] ?? 'unknown'}`, 'info')
+        ctx.ui.notify(output.join('\n'), 'info')
         } catch (err) {
           ctx.ui.setStatus('permissions-analyzer', '')
           ctx.ui.notify(`Probe failed: ${err instanceof Error ? err.message : String(err)}`, 'error')
@@ -328,8 +325,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
           '  model. Use mode="dry" to inspect the prompt without',
           '  cost, mode="call" to get an actual verdict.',
         ]
-        ctx.ui.setWidget('permissions-analyzer', output)
-        ctx.ui.notify('Use /permissions-analyzer dry or /permissions-analyzer call', 'info')
+        ctx.ui.notify(output.join('\n'), 'info')
         return
       }
 
@@ -349,8 +345,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
         if (config.additionalPolicy) {
           output.push('', '  ─── Additional Policy ───', '', ...config.additionalPolicy.split('\n').map(l => '  ' + l))
         }
-        ctx.ui.setWidget('permissions-analyzer', output)
-        ctx.ui.notify(`Config: ${config.provider}/${config.model} reasoning=${config.reasoning}`, 'info')
+        ctx.ui.notify(output.join('\n'), 'info')
         return
       }
 
@@ -369,7 +364,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
           '  Use with dry/call:',
           '    /permissions-analyzer dry --scenario {"command":"rm -rf /"}',
         ]
-        ctx.ui.setWidget('permissions-analyzer', output)
+        ctx.ui.notify(output.join('\n'), 'info')
         return
       }
 
@@ -449,8 +444,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
           output.push(`  ${count.toString().padStart(6)}  ${event}`)
         }
 
-        ctx.ui.setWidget('permissions-analyzer', output)
-        ctx.ui.notify(`Log: ${summary.autoReviewDecisions.total} auto-review decisions, ${summary.totalEntries.toLocaleString()} total entries`, 'info')
+        ctx.ui.notify(output.join('\n'), 'info')
         return
       }
 
