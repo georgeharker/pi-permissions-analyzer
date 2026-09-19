@@ -7,8 +7,12 @@
  *   3. Querying the live permission system to show what the deterministic rules say
  *
  * Usage (inside pi):
- *   /permissions-analyzer dry                     — dump the system + user prompt + policy check
- *   /permissions-analyzer call                    — call the model and show the verdict
+ *   /permissions-analyzer                  — show help / usage
+ *   /permissions-analyzer dry              — dump the system + user prompt + policy check
+ *   /permissions-analyzer call             — call the model and show the verdict
+ *   /permissions-analyzer config           — show the active auto-review config
+ *   /permissions-analyzer scenario [JSON]  — show/override the permission scenario
+ *   /permissions-analyzer log [N]          — show last N review decisions + resolutions from the log
  *   /permissions-analyzer call --scenario <json>  — override permission details with a custom scenario
  *
  * The analyzer reads your existing auto-review config, builds the real transcript
@@ -19,12 +23,14 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import type { Api, AssistantMessage, Model, Provider, SimpleStreamOptions, ThinkingLevel } from '@earendil-works/pi-ai'
 import { Type } from 'typebox'
+import { homedir } from 'node:os'
 import { getPermissionsService, PERMISSIONS_READY_CHANNEL } from '@gotgenes/pi-permission-system'
 import type { PermissionCheckResult, PermissionsReadyEvent } from '@gotgenes/pi-permission-system'
 import { loadAutoReviewConfig } from './config.js'
 import { buildReviewPrompt, type PermissionDetails } from './prompt.js'
 import { parseReviewAssessment } from './verdict.js'
 import { renderTranscript } from './transcript.js'
+import { getLogSummary, getRecentDecisions, getRecentResolutions, formatTimestamp, DEFAULT_LOG_PATH } from './log.js'
 
 function approximateTokens(text: string): number {
   return Math.ceil(text.length / 4)
@@ -159,7 +165,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
   })
 
   pi.registerCommand('permissions-analyzer', {
-    description: 'Analyze the auto-review classifier: dry | call [--scenario JSON]',
+    description: 'Analyze the auto-review classifier: help | dry | call | config | scenario | log',
     handler: async (args, ctx) => {
       const parts = (args ?? '').trim().split(/\s+/)
       const subcommand = parts[0] ?? 'dry'
@@ -281,7 +287,174 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
         return
       }
 
-      ctx.ui.notify(`Unknown subcommand: ${subcommand}. Use: dry | call`, 'error')
+      if (subcommand === 'help' || subcommand === '' || subcommand === '--help' || subcommand === '-h') {
+        const output = [
+          '╔══════════════════════════════════════════════════════╗',
+          '║  PERMISSIONS ANALYZER — HELP                         ║',
+          '╚══════════════════════════════════════════════════════╝',
+          '',
+          'Probes the pi-permission-auto-review classifier in isolation.',
+          'Also queries the live permission system to show deterministic rules.',
+          '',
+          '─── COMMANDS ───',
+          '',
+          '  /permissions-analyzer                  Show this help',
+          '  /permissions-analyzer help             Show this help',
+          '  /permissions-analyzer dry              Build prompt + policy check (no model call)',
+          '  /permissions-analyzer call             Call the reviewer model and show verdict',
+          '  /permissions-analyzer config           Show the active auto-review config',
+          '  /permissions-analyzer scenario [JSON]  Show/override the permission scenario',
+          '  /permissions-analyzer log [N]          Show last N review decisions + resolutions',
+          '',
+          '─── OPTIONS ───',
+          '',
+          '  --scenario {"command":"...","surface":"bash"}',
+          '    Override permission request fields for dry/call.',
+          '    Example:',
+          '      /permissions-analyzer call --scenario {"command":"cat ~/.cache/secrets/key"}',
+          '',
+          '─── CONFIG ───',
+          '',
+          `  Provider:   ${config.provider}`,
+          `  Model:      ${config.model}`,
+          `  Reasoning:  ${config.reasoning}`,
+          `  Timeout:    ${config.timeoutMs}ms`,
+          `  Baseline:   ${config.includeBaselinePolicy ? 'ON' : 'OFF'}`,
+          `  Additional: ${config.additionalPolicy ? 'YES (' + config.additionalPolicy.length + ' chars)' : 'none'}`,
+          '',
+          '─── LLM TOOL ───',
+          '',
+          '  The permissions_analyzer tool is also available to the',
+          '  model. Use mode="dry" to inspect the prompt without',
+          '  cost, mode="call" to get an actual verdict.',
+        ]
+        ctx.ui.setWidget('permissions-analyzer', output)
+        ctx.ui.notify('Use /permissions-analyzer dry or /permissions-analyzer call', 'info')
+        return
+      }
+
+      if (subcommand === 'config') {
+        const output = [
+          '╔══════════════════════════════════════════════════════╗',
+          '║  PERMISSIONS ANALYZER — CONFIG                        ║',
+          '╚══════════════════════════════════════════════════════╝',
+          '',
+          `  Provider:     ${config.provider}`,
+          `  Model:        ${config.model}`,
+          `  Reasoning:    ${config.reasoning}`,
+          `  Timeout:      ${config.timeoutMs}ms`,
+          `  Baseline:     ${config.includeBaselinePolicy ? 'ON' : 'OFF'}`,
+          `  Additional:   ${config.additionalPolicy ? 'YES' : 'none'}`,
+        ]
+        if (config.additionalPolicy) {
+          output.push('', '  ─── Additional Policy ───', '', ...config.additionalPolicy.split('\n').map(l => '  ' + l))
+        }
+        ctx.ui.setWidget('permissions-analyzer', output)
+        ctx.ui.notify(`Config: ${config.provider}/${config.model} reasoning=${config.reasoning}`, 'info')
+        return
+      }
+
+      if (subcommand === 'scenario') {
+        const overrides = parseScenarioArg(parts)
+        const scenario: PermissionDetails = { ...DEFAULT_SCENARIO, ...overrides }
+        const output = [
+          '╔══════════════════════════════════════════════════════╗',
+          '║  PERMISSIONS ANALYZER — SCENARIO                     ║',
+          '╚══════════════════════════════════════════════════════╝',
+          '',
+          '  Default scenario with any --scenario overrides applied:',
+          '',
+          ...JSON.stringify(scenario, null, 2).split('\n').map(l => '  ' + l),
+          '',
+          '  Use with dry/call:',
+          '    /permissions-analyzer dry --scenario {"command":"rm -rf /"}',
+        ]
+        ctx.ui.setWidget('permissions-analyzer', output)
+        return
+      }
+
+      if (subcommand === 'log') {
+        const n = parseInt(parts[1] ?? '20', 10) || 20
+        const summary = getLogSummary(DEFAULT_LOG_PATH)
+
+        if (!summary) {
+          ctx.ui.notify(`Log not found at ${DEFAULT_LOG_PATH}`, 'error')
+          return
+        }
+
+        const decisions = getRecentDecisions(DEFAULT_LOG_PATH, { limit: n })
+        const resolutions = getRecentResolutions(DEFAULT_LOG_PATH, { limit: n })
+
+        const output = [
+          '╔══════════════════════════════════════════════════════╗',
+          '║  PERMISSIONS ANALYZER — REVIEW LOG                    ║',
+          '╚══════════════════════════════════════════════════════╝',
+          '',
+          `  Log:     ${DEFAULT_LOG_PATH.replace(homedir(), '~')}`,
+          `  Size:    ${(summary.logSizeBytes / 1024).toFixed(0)} KB`,
+          `  Entries: ${summary.totalEntries.toLocaleString()}`,
+          `  From:    ${summary.oldestTimestamp ? formatTimestamp(summary.oldestTimestamp) : '(empty)'}`,
+          `  To:      ${summary.newestTimestamp ? formatTimestamp(summary.newestTimestamp) : '(empty)'}`,
+          '',
+          '─── AUTO-REVIEW DECISIONS ───',
+          '',
+          `  Total:  ${summary.autoReviewDecisions.total}`,
+          `  Allow:  ${summary.autoReviewDecisions.allow}  ·  Deny: ${summary.autoReviewDecisions.deny}`,
+          `  Risk:   ${Object.entries(summary.autoReviewDecisions.byRiskLevel).map(([k, v]) => `${k}: ${v}`).join('  ·  ') || 'none'}`,
+          `  Avg duration: ${summary.autoReviewDecisions.avgDurationMs ?? 'n/a'}ms`,
+          '',
+          `─── RECENT DECISIONS (last ${decisions.length}) ───`,
+          '',
+        ]
+
+        if (decisions.length === 0) {
+          output.push('  (no auto_review.decision events found)')
+        } else {
+          for (const d of decisions) {
+            const icon = d.outcome === 'allow' ? '✓' : '✗'
+            output.push(
+              `  ${icon} ${formatTimestamp(d.timestamp)}  ${d.outcome.toUpperCase().padEnd(5)}  risk=${d.riskLevel.padEnd(8)}  ${d.durationMs}ms  ${d.provider}/${d.model}  transcript=${d.transcriptRetained}/${d.transcriptRetained + d.transcriptOmitted}`,
+            )
+          }
+        }
+
+        output.push(
+          '',
+          `─── RECENT RESOLUTIONS (last ${resolutions.length}) ───`,
+          '',
+        )
+
+        if (resolutions.length === 0) {
+          output.push('  (no permission_request.* events found)')
+        } else {
+          for (const r of resolutions) {
+            const eventShort = r.event.replace('permission_request.', '')
+            const icon = eventShort === 'blocked' ? '✗' : eventShort === 'approved' ? '⏎' : '✓'
+            const cmd = r.command.length > 60 ? r.command.slice(0, 57) + '…' : r.command
+            output.push(
+              `  ${icon} ${formatTimestamp(r.timestamp)}  ${eventShort.padEnd(26)}  ${r.surface}/${r.toolName}  ${cmd}`,
+            )
+          }
+        }
+
+        output.push(
+          '',
+          '─── EVENT COUNTS ───',
+          '',
+        )
+
+        const sortedEvents = Object.entries(summary.eventCounts)
+          .sort((a, b) => b[1] - a[1])
+        for (const [event, count] of sortedEvents) {
+          output.push(`  ${count.toString().padStart(6)}  ${event}`)
+        }
+
+        ctx.ui.setWidget('permissions-analyzer', output)
+        ctx.ui.notify(`Log: ${summary.autoReviewDecisions.total} auto-review decisions, ${summary.totalEntries.toLocaleString()} total entries`, 'info')
+        return
+      }
+
+      ctx.ui.notify(`Unknown subcommand: ${subcommand}. Use: help | dry | call | config | scenario | log`, 'error')
     },
   })
 
