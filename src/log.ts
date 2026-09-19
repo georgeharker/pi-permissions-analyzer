@@ -246,6 +246,37 @@ export function getRecentResolutions(
     .slice(-(filter.limit ?? 30))
 }
 
+export function getLastResolution(
+  logPath: string = DEFAULT_LOG_PATH,
+): { surface: string; toolName: string; command: string; matchedPattern: string; resolution: string } | null {
+  if (!existsSync(logPath)) return null
+  const text = readFileSync(logPath, 'utf8')
+  const entries = tailLines(text, 2000)
+
+  const resolutionEvents = new Set([
+    'permission_request.approved',
+    'permission_request.auto_approved',
+    'permission_request.blocked',
+    'permission_request.infrastructure_auto_allowed',
+    'permission_request.session_approved',
+  ])
+
+  // Walk backwards to find the most recent resolution
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i] as PermissionResolved
+    if (resolutionEvents.has(e.event)) {
+      return {
+        surface: e.surface,
+        toolName: e.toolName,
+        command: e.command ?? '',
+        matchedPattern: e.matchedPattern ?? '',
+        resolution: e.resolution,
+      }
+    }
+  }
+  return null
+}
+
 export function formatTimestamp(iso: string): string {
   try {
     const d = new Date(iso)
