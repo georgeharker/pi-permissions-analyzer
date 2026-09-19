@@ -1,6 +1,6 @@
 {
   "name": "@geohar/pi-permissions-analyzer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Pi extension: analyze and probe the pi-permission-auto-review classifier. Dry-run or call the model to validate additionalPolicy rules and inspect prompt construction.",
   "type": "module",
   "main": "dist/index.js",
@@ -51,7 +51,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {},
   "devDependencies": {
