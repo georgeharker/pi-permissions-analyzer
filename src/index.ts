@@ -4,19 +4,23 @@
  * Lets you test the classifier in isolation by:
  *   1. Building the exact prompt the reviewer would send (dry run)
  *   2. Calling the configured model with that prompt and showing the verdict
+ *   3. Querying the live permission system to show what the deterministic rules say
  *
  * Usage (inside pi):
- *   /permissions-analyzer dry                     — dump the system + user prompt without calling the model
+ *   /permissions-analyzer dry                     — dump the system + user prompt + policy check
  *   /permissions-analyzer call                    — call the model and show the verdict
  *   /permissions-analyzer call --scenario <json>  — override permission details with a custom scenario
  *
- * The probe reads your existing auto-review config, builds the real transcript
- * from the current session, and constructs the exact prompt the reviewer uses.
+ * The analyzer reads your existing auto-review config, builds the real transcript
+ * from the current session, queries the live permission system, and constructs
+ * the exact prompt the reviewer uses.
  */
 
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import type { Api, AssistantMessage, Model, Provider, SimpleStreamOptions, ThinkingLevel } from '@earendil-works/pi-ai'
 import { Type } from 'typebox'
+import { getPermissionsService, PERMISSIONS_READY_CHANNEL } from '@gotgenes/pi-permission-system'
+import type { PermissionCheckResult, PermissionsReadyEvent } from '@gotgenes/pi-permission-system'
 import { loadAutoReviewConfig } from './config.js'
 import { buildReviewPrompt, type PermissionDetails } from './prompt.js'
 import { parseReviewAssessment } from './verdict.js'
@@ -86,9 +90,76 @@ function parseScenarioArg(parts: string[]): Record<string, unknown> {
   }
 }
 
-export default function reviewProbe(pi: ExtensionAPI): void {
+interface PolicyCheck {
+  surface: string
+  value: string
+  result: PermissionCheckResult | null
+  available: boolean
+}
+
+function queryPolicy(sessionId: string | undefined, surface: string, value: string): PolicyCheck {
+  if (sessionId === undefined) {
+    return { surface, value, result: null, available: false }
+  }
+  const service = getPermissionsService(sessionId)
+  if (service === undefined) {
+    return { surface, value, result: null, available: false }
+  }
+  try {
+    const result = service.checkPermission(surface, value)
+    return { surface, value, result, available: true }
+  } catch {
+    return { surface, value, result: null, available: false }
+  }
+}
+
+function formatPolicyCheck(check: PolicyCheck): string[] {
+  if (!check.available) {
+    return ['Permission system: not available (no sessionId or service not ready)']
+  }
+  if (check.result === null) {
+    return ['Permission system: query failed']
+  }
+  const r = check.result
+  return [
+    '─── PERMISSION SYSTEM (deterministic rules) ───',
+    `  Surface:   ${r.toolName}`,
+    `  Value:     ${check.value}`,
+    `  State:     ${r.state}`,
+    `  Origin:    ${r.origin}`,
+    `  Pattern:   ${r.matchedPattern ?? '(none)'}`,
+    `  Command:   ${r.command ?? '(none)'}`,
+    '',
+    `The deterministic rules say "${r.state}" (from ${r.origin}).`,
+    'The authorizer chain runs AFTER these rules — it can only',
+    '  - allow when state is "ask" (auto-approve)',
+    '  - deny (auto-deny)',
+    '  - defer (let the human decide)',
+    'It CANNOT override a config-level "allow" or "deny".',
+  ]
+}
+
+export default function permissionsAnalyzer(pi: ExtensionAPI): void {
+  // Capture the session ID from pi-permission-system's ready event.
+  // The service is session-keyed: one Pi process hosts several nodes
+  // (root session + in-process subagents), each publishing under its own ID.
+  let sessionId: string | undefined
+
+  pi.events.on(PERMISSIONS_READY_CHANNEL, (data: unknown) => {
+    const ready = data as PermissionsReadyEvent | undefined
+    const id = ready?.sessionId
+    if (id != null) {
+      // Learn-once: ready repeats, so this is not last-writer-wins.
+      sessionId ??= id
+    }
+  })
+
+  pi.on('session_shutdown', () => {
+    sessionId = undefined
+  })
+
   pi.registerCommand('permissions-analyzer', {
-    description: 'Analyze the auto-review classifier in isolation: dry | call [--scenario JSON]',
+    description: 'Analyze the auto-review classifier: dry | call [--scenario JSON]',
     handler: async (args, ctx) => {
       const parts = (args ?? '').trim().split(/\s+/)
       const subcommand = parts[0] ?? 'dry'
@@ -101,22 +172,29 @@ export default function reviewProbe(pi: ExtensionAPI): void {
 
       const { systemPrompt, userPrompt } = buildReviewPrompt(config, transcript, details)
 
+      // Query the live permission system for the scenario's surface + value
+      const surface = typeof details.surface === 'string' ? details.surface : 'bash'
+      const value = typeof details.command === 'string' ? details.command : (details.value ?? 'echo $HOME')
+      const policyCheck = queryPolicy(sessionId, surface, value)
+
       if (subcommand === 'dry') {
         const output = [
-          `╔══════════════════════════════════════════════════════╗`,
-          `║  PERMISSIONS ANALYZER — DRY RUN                       ║`,
-          `╚══════════════════════════════════════════════════════╝`,
-          ``,
+          '╔══════════════════════════════════════════════════════╗',
+          '║  PERMISSIONS ANALYZER — DRY RUN                       ║',
+          '╚══════════════════════════════════════════════════════╝',
+          '',
           `Config: provider=${config.provider} model=${config.model} reasoning=${config.reasoning}`,
           `Baseline policy: ${config.includeBaselinePolicy ? 'ON' : 'OFF'}`,
           `Additional policy: ${config.additionalPolicy ? 'YES' : 'none'}`,
-          ``,
+          '',
           `Transcript: ${transcript.stats.transcriptEntriesRetained} retained, ${transcript.stats.transcriptEntriesOmitted} omitted, ${transcript.stats.transcriptEntriesTruncated} truncated`,
           `Latest trusted entry retained: ${transcript.stats.latestTrustedEntryRetained}`,
-          ``,
+          '',
+          ...formatPolicyCheck(policyCheck),
+          '',
           `─── SYSTEM PROMPT (${systemPrompt.length} chars, ~${approximateTokens(systemPrompt)} tokens) ───`,
           systemPrompt,
-          ``,
+          '',
           `─── USER PROMPT (${userPrompt.length} chars, ~${approximateTokens(userPrompt)} tokens) ───`,
           userPrompt,
         ]
@@ -174,20 +252,22 @@ export default function reviewProbe(pi: ExtensionAPI): void {
           }
 
           const output = [
-            `╔══════════════════════════════════════════════════════╗`,
-            `║  PERMISSIONS ANALYZER — LIVE CALL                     ║`,
-            `╚══════════════════════════════════════════════════════╝`,
-            ``,
+            '╔══════════════════════════════════════════════════════╗',
+            '║  PERMISSIONS ANALYZER — LIVE CALL                     ║',
+            '╚══════════════════════════════════════════════════════╝',
+            '',
             `Config: provider=${config.provider} model=${config.model} reasoning=${config.reasoning}`,
             `Transcript: ${transcript.stats.transcriptEntriesRetained} retained, ${transcript.stats.transcriptEntriesOmitted} omitted`,
-            ``,
-            `─── MODEL RESPONSE ───`,
+            '',
+            ...formatPolicyCheck(policyCheck),
+            '',
+            '─── MODEL RESPONSE ───',
             text,
-            ``,
-            `─── PARSED VERDICT ───`,
+            '',
+            '─── PARSED VERDICT ───',
             JSON.stringify(verdict, null, 2),
-            ``,
-            `─── SCENARIO DETAILS ───`,
+            '',
+            '─── SCENARIO DETAILS ───',
             JSON.stringify(details, null, 2),
           ]
 
@@ -209,7 +289,7 @@ export default function reviewProbe(pi: ExtensionAPI): void {
     name: 'permissions_analyzer',
     label: 'Permissions Analyzer',
     description:
-      'Analyze the pi-permission-auto-review classifier. Returns the prompt it would receive (dry) or calls the model and returns the verdict (call). Use to validate how additionalPolicy rules affect decisions.',
+      'Analyze the pi-permission-auto-review classifier. Returns the prompt it would receive (dry) or calls the model and returns the verdict (call). Also queries the live permission system to show deterministic rules. Use to validate how additionalPolicy rules affect decisions.',
     promptSnippet: 'Analyze the permission reviewer with dry or call mode',
     promptGuidelines: [
       'Use permissions_analyzer to test how the auto-review classifier would judge a permission request.',
@@ -234,15 +314,22 @@ export default function reviewProbe(pi: ExtensionAPI): void {
       const details: PermissionDetails = { ...DEFAULT_SCENARIO, ...params.scenario }
       const { systemPrompt, userPrompt } = buildReviewPrompt(config, transcript, details)
 
+      // Query live permission system
+      const surface = typeof details.surface === 'string' ? details.surface : 'bash'
+      const value = typeof details.command === 'string' ? details.command : (details.value ?? 'echo $HOME')
+      const policyCheck = queryPolicy(sessionId, surface, value)
+
+      const policyLines = formatPolicyCheck(policyCheck).join('\n')
+
       if (params.mode === 'dry') {
         return {
           content: [
             {
               type: 'text',
-              text: `# Review Probe — DRY RUN\n\nConfig: provider=${config.provider} model=${config.model}\nBaseline: ${config.includeBaselinePolicy ? 'ON' : 'OFF'}\nAdditional policy: ${config.additionalPolicy ?? 'none'}\nTranscript: ${transcript.stats.transcriptEntriesRetained} retained, ${transcript.stats.transcriptEntriesOmitted} omitted\n\n## System Prompt (~${approximateTokens(systemPrompt)} tokens)\n\`\`\`\n${systemPrompt}\n\`\`\`\n\n## User Prompt (~${approximateTokens(userPrompt)} tokens)\n\`\`\`\n${userPrompt}\n\`\`\``,
+              text: `# Permissions Analyzer — DRY RUN\n\nConfig: provider=${config.provider} model=${config.model}\nBaseline: ${config.includeBaselinePolicy ? 'ON' : 'OFF'}\nAdditional policy: ${config.additionalPolicy ?? 'none'}\nTranscript: ${transcript.stats.transcriptEntriesRetained} retained, ${transcript.stats.transcriptEntriesOmitted} omitted\n\n${policyLines}\n\n## System Prompt (~${approximateTokens(systemPrompt)} tokens)\n\`\`\`\n${systemPrompt}\n\`\`\`\n\n## User Prompt (~${approximateTokens(userPrompt)} tokens)\n\`\`\`\n${userPrompt}\n\`\`\``,
             },
           ],
-          details: { config, transcriptStats: transcript.stats, details },
+          details: { config, transcriptStats: transcript.stats, details, policyCheck },
         }
       }
 
@@ -292,10 +379,10 @@ export default function reviewProbe(pi: ExtensionAPI): void {
         content: [
           {
             type: 'text',
-            text: `# Review Probe — LIVE CALL\n\nConfig: provider=${config.provider} model=${config.model}\n\n## Verdict\n\`\`\`json\n${JSON.stringify(verdict, null, 2)}\n\`\`\`\n\n## Scenario\n\`\`\`json\n${JSON.stringify(details, null, 2)}\n\`\`\``,
+            text: `# Permissions Analyzer — LIVE CALL\n\nConfig: provider=${config.provider} model=${config.model}\n\n${policyLines}\n\n## Verdict\n\`\`\`json\n${JSON.stringify(verdict, null, 2)}\n\`\`\`\n\n## Scenario\n\`\`\`json\n${JSON.stringify(details, null, 2)}\n\`\`\``,
           },
         ],
-        details: { verdict, scenario: details, transcriptStats: transcript.stats },
+        details: { verdict, scenario: details, transcriptStats: transcript.stats, policyCheck },
       }
     },
   })
