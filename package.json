@@ -45,7 +45,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/geohar/pi-permissions-analyzer.git"
+    "url": "git+https://github.com/georgeharker/pi-permissions-analyzer.git"
   },
   "publishConfig": {
     "access": "public"
@@ -62,7 +62,7 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.84.0",
-    "@earendil-works/pi-cCcoding-agent": ">=0.84.0",
+    "@earendil-works/pi-coding-agent": ">=0.84.0",
     "@gotgenes/pi-permission-system": ">=27.0.0",
     "typebox": "^1.1.0"
   }
