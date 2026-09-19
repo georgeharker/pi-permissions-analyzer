@@ -107,8 +107,65 @@ const PRESET_SCENARIOS: { label: string; overrides: Record<string, unknown> }[] 
   { label: '📝  write to ~/important.txt', overrides: { command: 'tee ~/important.txt', surface: 'bash', toolName: 'bash' } },
 ]
 
+const SURFACES = ['bash', 'read', 'write', 'edit', 'mcp', 'fetch', 'web']
+const TOOL_NAMES = ['bash', 'read', 'write', 'edit', 'mcp', 'fetch_content', 'web_search', 'ask_user']
+
+/** Interactive field-by-field scenario builder. */
+async function buildCustomScenario(
+  ctx: {
+    ui: {
+      select: (title: string, opts: string[]) => Promise<string | undefined>
+      input: (title: string, placeholder?: string) => Promise<string | undefined>
+    }
+  },
+  defaults: Record<string, unknown>,
+): Promise<Record<string, unknown> | null> {
+  // Surface
+  const surfaceChoice = await ctx.ui.select(
+    'Surface',
+    [...SURFACES, '(skip)'],
+  )
+  if (surfaceChoice === undefined) return null
+  const surface = surfaceChoice === '(skip)' ? undefined : surfaceChoice
+
+  // Tool name
+  const toolChoice = await ctx.ui.select(
+    'Tool name',
+    [...TOOL_NAMES, '(skip)'],
+  )
+  if (toolChoice === undefined) return null
+  const toolName = toolChoice === '(skip)' ? undefined : toolChoice
+
+  // Command (free text)
+  const commandDefault = typeof defaults.command === 'string' ? defaults.command : ''
+  const commandInput = await ctx.ui.input('Command', commandDefault || 'echo $HOME')
+  if (commandInput === undefined) return null
+
+  // Path (optional)
+  const pathInput = await ctx.ui.input('Path (or leave empty)', typeof defaults.path === 'string' ? defaults.path : '')
+  if (pathInput === undefined) return null
+
+  // Value (defaults to command if empty)
+  const valueDefault = typeof defaults.value === 'string' ? defaults.value : commandInput
+  const valueInput = await ctx.ui.input('Value (or leave empty for command)', valueDefault)
+  if (valueInput === undefined) return null
+
+  const overrides: Record<string, unknown> = { command: commandInput }
+  if (surface) overrides.surface = surface
+  if (toolName) overrides.toolName = toolName
+  if (pathInput) overrides.path = pathInput
+  if (valueInput) overrides.value = valueInput
+
+  return overrides
+}
+
 /** Build scenario overrides from a picker selection. */
-async function pickScenario(ctx: { ui: { select: (title: string, opts: string[]) => Promise<string | undefined> } }): Promise<{ overrides: Record<string, unknown>; source: string } | null> {
+async function pickScenario(ctx: {
+  ui: {
+    select: (title: string, opts: string[]) => Promise<string | undefined>
+    input: (title: string, placeholder?: string) => Promise<string | undefined>
+  }
+}): Promise<{ overrides: Record<string, unknown>; source: string } | null> {
   const recent = getRecentResolutions(DEFAULT_LOG_PATH, { limit: 10 })
 
   const options: string[] = []
@@ -120,6 +177,10 @@ async function pickScenario(ctx: { ui: { select: (title: string, opts: string[])
     options.push(preset.label)
     mapping.set(idx, { overrides: preset.overrides, source: 'preset' })
   }
+
+  // Custom builder entry
+  const customIdx = options.length
+  options.push('✏️  Custom…')
 
   // Then recent from log
   if (recent.length > 0) {
@@ -149,6 +210,19 @@ async function pickScenario(ctx: { ui: { select: (title: string, opts: string[])
   if (choice === undefined) return null // cancelled
 
   const choiceIdx = options.indexOf(choice)
+
+  // Custom builder — step through each field
+  if (choiceIdx === customIdx) {
+    // Seed defaults from the most recent log entry
+    const last = recent.length > 0 ? recent[recent.length - 1] : null
+    const defaults: Record<string, unknown> = last
+      ? { command: last.command, surface: last.surface, toolName: last.toolName, path: '', value: last.command }
+      : { command: 'echo $HOME', surface: 'bash', toolName: 'bash', path: '', value: 'echo $HOME' }
+    const custom = await buildCustomScenario(ctx, defaults)
+    if (custom === null) return null // cancelled mid-build
+    return { overrides: custom, source: 'custom' }
+  }
+
   const mapped = mapping.get(choiceIdx)
   if (!mapped) return null // separator or unmapped
 
