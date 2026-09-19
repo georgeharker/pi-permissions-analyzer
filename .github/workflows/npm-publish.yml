@@ -1,4 +1,4 @@
-2name: Publish Package
+name: Publish Package
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   publish:
-    runs-onB-on: ubuntu-latest
+    runs-on: ubuntu-latest
     environment: npm
     steps:
       - uses: actions/checkout@v4
