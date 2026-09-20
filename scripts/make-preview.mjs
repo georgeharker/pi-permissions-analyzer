@@ -13,7 +13,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
 // ---------------- card spec (edit here, then re-run) ----------------
-const SPEC = { accent: "#a428f0", hero: { word: "perms", size: 200, underline: { y: 490, width: 210 } } };
+const SPEC = { accent: "#a428f0", hero: { word: "perms-analyzer", size: 130, underline: { y: 490, width: 380 } } };
 // accent: band rule + chip color
 // hero: { image: "path/relative/to/package/root" }
 //   or { word: "...", size: 200, underline: { y: 490, width: 210 } }
