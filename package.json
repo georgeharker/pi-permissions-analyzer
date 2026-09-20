@@ -14,12 +14,14 @@
   "pi": {
     "extensions": [
       "./dist/index.js"
-    ]
+    ],
+    "image": "https://cdn.jsdelivr.net/npm/@geohar/pi-permissions-analyzer/assets/preview.png"
   },
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "assets"
   ],
   "scripts": {
     "build": "tsup",
