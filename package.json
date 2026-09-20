@@ -15,7 +15,7 @@
     "extensions": [
       "./dist/index.js"
     ],
-    "image": "https://cdn.jsdelivr.net/npm/@geohar/pi-permissions-analyzer/assets/preview.png"
+    "image": "https://raw.githubusercontent.com/georgeharker/pi-permissions-analyzer/main/assets/preview.png"
   },
   "files": [
     "dist",
