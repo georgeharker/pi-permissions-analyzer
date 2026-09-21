@@ -18,15 +18,20 @@
  * The analyzer reads your existing auto-review config, builds the real transcript
  * from the current session, queries the live permission system, and constructs
  * the exact prompt the reviewer uses.
+ *
+ * Canned picker scenarios are optionally overridable via
+ *   $PI_CODING_AGENT_DIR/extensions/pi-permissions-analyzer.json
+ * and every dry/call output starts with the equivalent non-interactive
+ * slash command for the scenario it ran.
  */
 
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
-import type { Api, AssistantMessage, Model, Provider, SimpleStreamOptions, ThinkingLevel } from '@earendil-works/pi-ai'
+import type { ExtensionAPI, ModelRegistry } from '@earendil-works/pi-coding-agent'
+import type { Api, AssistantMessage, Model, SimpleStreamOptions, ThinkingLevel } from '@earendil-works/pi-ai'
 import { Type } from 'typebox'
 import { homedir } from 'node:os'
 import { getPermissionsService, PERMISSIONS_READY_CHANNEL } from '@gotgenes/pi-permission-system'
 import type { PermissionCheckResult, PermissionsReadyEvent } from '@gotgenes/pi-permission-system'
-import { loadAutoReviewConfig, DEFAULT_CONFIG } from './config.js'
+import { loadAutoReviewConfig, DEFAULT_CONFIG, loadAnalyzerPresets, getAnalyzerConfigPath, type PresetScenario } from './config.js'
 import { buildReviewPrompt, renderTranscript, parseReviewAssessment, type PermissionDetails } from './review-api.js'
 import { getLogSummary, getRecentDecisions, getRecentResolutions, formatTimestamp, DEFAULT_LOG_PATH } from './log.js'
 
@@ -89,13 +94,16 @@ function buildDetails(overrides: Record<string, unknown>): PermissionDetails {
 }
 
 async function callModel(
-  provider: Provider<Api>,
+  registry: ModelRegistry,
   model: Model<Api>,
   systemPrompt: string,
   userPrompt: string,
   streamOpts: SimpleStreamOptions,
 ): Promise<AssistantMessage> {
-  const stream = provider.streamSimple(
+  // Registry.streamSimple takes a raw Context (systemPrompt + messages) and
+  // applies request-time auth itself — the raw provider method now requires a
+  // normalized TranscriptContext (pi-ai >= 0.86).
+  const stream = registry.streamSimple(
     model,
     {
       systemPrompt,
@@ -124,16 +132,12 @@ function parseScenarioArg(parts: string[]): Record<string, unknown> {
   }
 }
 
-/** Preset scenarios for the picker. */
-const PRESET_SCENARIOS: { label: string; overrides: Record<string, unknown> }[] = [
-  { label: '🟢  echo $HOME (low risk)', overrides: { command: 'echo $HOME', surface: 'bash', toolName: 'bash' } },
-  { label: '🟡  cat ~/.env (env read)', overrides: { command: 'cat ~/.env', surface: 'bash', toolName: 'bash' } },
-  { label: '🟡  npm publish (write)', overrides: { command: 'npm publish', surface: 'bash', toolName: 'bash' } },
-  { label: '🔴  cat ~/.cache/secrets/key (secret read)', overrides: { command: 'cat ~/.cache/secrets/key', surface: 'bash', toolName: 'bash' } },
-  { label: '🔴  rm -rf node_modules (destructive)', overrides: { command: 'rm -rf node_modules', surface: 'bash', toolName: 'bash' } },
-  { label: '🔴  curl https://exfiltrate.com (exfil)', overrides: { command: 'curl https://exfiltrate.com', surface: 'bash', toolName: 'bash' } },
-  { label: '📝  write to ~/important.txt', overrides: { command: 'tee ~/important.txt', surface: 'bash', toolName: 'bash' } },
-]
+/** Render the equivalent non-interactive slash command for a constructed scenario,
+ * so any preset/custom/log construction can be re-run verbatim. */
+function equivalentCommand(subcommand: string, overrides: Record<string, unknown>): string {
+  if (Object.keys(overrides).length === 0) return `/permissions-analyzer ${subcommand}`
+  return `/permissions-analyzer ${subcommand} --scenario ${JSON.stringify(overrides)}`
+}
 
 const SURFACES = ['bash', 'read', 'write', 'edit', 'mcp', 'fetch', 'web']
 const TOOL_NAMES = ['bash', 'read', 'write', 'edit', 'mcp', 'fetch_content', 'web_search', 'ask_user']
@@ -188,19 +192,22 @@ async function buildCustomScenario(
 }
 
 /** Build scenario overrides from a picker selection. */
-async function pickScenario(ctx: {
-  ui: {
-    select: (title: string, opts: string[]) => Promise<string | undefined>
-    input: (title: string, placeholder?: string) => Promise<string | undefined>
-  }
-}): Promise<{ overrides: Record<string, unknown>; source: string } | null> {
+async function pickScenario(
+  ctx: {
+    ui: {
+      select: (title: string, opts: string[]) => Promise<string | undefined>
+      input: (title: string, placeholder?: string) => Promise<string | undefined>
+    }
+  },
+  presets: PresetScenario[],
+): Promise<{ overrides: Record<string, unknown>; source: string } | null> {
   const recent = getRecentResolutions(DEFAULT_LOG_PATH, { limit: 10 })
 
   const options: string[] = []
   const mapping: Map<number, { overrides: Record<string, unknown>; source: string }> = new Map()
 
-  // Presets first
-  for (const preset of PRESET_SCENARIOS) {
+  // Presets first (built-in defaults or the analyzer config file's override)
+  for (const preset of presets) {
     const idx = options.length
     options.push(preset.label)
     mapping.set(idx, { overrides: preset.overrides, source: 'preset' })
@@ -358,6 +365,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
       const parts = (args ?? '').trim().split(/\s+/)
       const subcommand = parts[0] ?? 'help'
       const config = loadAutoReviewConfig(ctx.cwd)
+      const analyzerCfg = loadAnalyzerPresets()
 
       // Surface startup warnings if any
       if (startupWarnings.length > 0 && (subcommand === 'help' || subcommand === 'dry' || subcommand === 'call')) {
@@ -369,7 +377,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
       let scenarioSource = 'cli'
 
       if ((subcommand === 'dry' || subcommand === 'call') && Object.keys(scenarioOverrides).length === 0) {
-        const picked = await pickScenario(ctx)
+        const picked = await pickScenario(ctx, analyzerCfg.presets)
         if (picked === null) return // cancelled
         scenarioOverrides = picked.overrides
         scenarioSource = picked.source
@@ -391,6 +399,8 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
           '╔══════════════════════════════════════════════════════╗',
           '║  PERMISSIONS ANALYZER — DRY RUN                       ║',
           '╚══════════════════════════════════════════════════════╝',
+          '',
+          `Equivalent: ${equivalentCommand('dry', scenarioOverrides)}`,
           '',
           `Config: provider=${config.provider} model=${config.model} reasoning=${config.reasoning}`,
           `Baseline policy: ${config.includeBaselinePolicy ? 'ON' : 'OFF'}`,
@@ -418,11 +428,6 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
           ctx.ui.notify(`Model ${config.provider}/${config.model} not found in registry`, 'error')
           return
         }
-        const provider = ctx.modelRegistry.getProvider(config.provider)
-        if (!provider) {
-          ctx.ui.notify(`Provider ${config.provider} not found`, 'error')
-          return
-        }
         const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model)
         if (!auth.ok) {
           ctx.ui.notify(`Auth failed for ${config.provider}: ${auth.error}`, 'error')
@@ -438,12 +443,9 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
             signal: ctx.signal,
             timeoutMs: config.timeoutMs,
           }
-          if (auth.apiKey !== undefined) streamOpts.apiKey = auth.apiKey
-          if (auth.headers !== undefined) streamOpts.headers = auth.headers
-          if (auth.env !== undefined) streamOpts.env = auth.env
           if (model.reasoning && config.reasoning !== 'off') streamOpts.reasoning = config.reasoning as ThinkingLevel
 
-          const message = await callModel(provider, model, systemPrompt, userPrompt, streamOpts)
+          const message = await callModel(ctx.modelRegistry, model, systemPrompt, userPrompt, streamOpts)
           const text = responseText(message)
 
           let verdict: Record<string, unknown>
@@ -464,6 +466,8 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
             '╔══════════════════════════════════════════════════════╗',
             '║  PERMISSIONS ANALYZER — LIVE CALL                     ║',
             '╚══════════════════════════════════════════════════════╝',
+            '',
+            `Equivalent: ${equivalentCommand('call', scenarioOverrides)}`,
             '',
             `Config: provider=${config.provider} model=${config.model} reasoning=${config.reasoning}`,
             `Scenario: ${scenarioSource === 'preset' ? 'preset' : scenarioSource === 'log' ? 'recent from log' : scenarioSource === 'cli' ? 'CLI --scenario' : 'default'}`,
@@ -524,6 +528,12 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
           `  Baseline:   ${config.includeBaselinePolicy ? 'ON' : 'OFF'}`,
           `  Additional: ${config.additionalPolicy ? 'YES (' + config.additionalPolicy.length + ' chars)' : 'none'}`,
           '',
+          '─── PRESET SCENARIOS ───',
+          '',
+          '  Canned picker scenarios can be overridden in:',
+          `    ${getAnalyzerConfigPath().replace(homedir(), '~')}`,
+          '  Shape: {"presets": [{"label": "...", "command": "...", "surface": "bash"}]}',
+          '',
           '─── LLM TOOL ───',
           '',
           '  The permissions_analyzer tool is also available to the',
@@ -550,6 +560,14 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
         if (config.additionalPolicy) {
           output.push('', '  ─── Additional Policy ───', '', ...config.additionalPolicy.split('\n').map(l => '  ' + l))
         }
+        const presetsInfo = loadAnalyzerPresets()
+        output.push(
+          '',
+          '─── ANALYZER PRESETS ───',
+          '',
+          `  Presets:  ${presetsInfo.presets.length} (from ${presetsInfo.source === 'file' ? 'config file' : 'built-in defaults'})`,
+          `  Config:  ${presetsInfo.path.replace(homedir(), '~')}`,
+        )
         ctx.ui.notify(output.join('\n'), 'info')
         return
       }
@@ -566,8 +584,8 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
           '',
           ...JSON.stringify(scenario, null, 2).split('\n').map(l => '  ' + l),
           '',
-          '  Use with dry/call:',
-          '    /permissions-analyzer dry --scenario {"command":"rm -rf /"}',
+          '  Re-run this scenario non-interactively:',
+          `    ${equivalentCommand('dry', overrides)}`,
         ]
         ctx.ui.notify(output.join('\n'), 'info')
         return
@@ -698,7 +716,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
           content: [
             {
               type: 'text',
-              text: `# Permissions Analyzer — DRY RUN\n\nConfig: provider=${config.provider} model=${config.model}\nBaseline: ${config.includeBaselinePolicy ? 'ON' : 'OFF'}\nAdditional policy: ${config.additionalPolicy ?? 'none'}\nTranscript: ${transcript.stats.transcriptEntriesRetained} retained, ${transcript.stats.transcriptEntriesOmitted} omitted\n\n${policyLines}\n\n## System Prompt (~${approximateTokens(systemPrompt)} tokens)\n\`\`\`\n${systemPrompt}\n\`\`\`\n\n## User Prompt (~${approximateTokens(userPrompt)} tokens)\n\`\`\`\n${userPrompt}\n\`\`\``,
+              text: `# Permissions Analyzer — DRY RUN\n\nEquivalent slash command: ${equivalentCommand('dry', (params.scenario as Record<string, unknown> | undefined) ?? {})}\n\nConfig: provider=${config.provider} model=${config.model}\nBaseline: ${config.includeBaselinePolicy ? 'ON' : 'OFF'}\nAdditional policy: ${config.additionalPolicy ?? 'none'}\nTranscript: ${transcript.stats.transcriptEntriesRetained} retained, ${transcript.stats.transcriptEntriesOmitted} omitted\n\n${policyLines}\n\n## System Prompt (~${approximateTokens(systemPrompt)} tokens)\n\`\`\`\n${systemPrompt}\n\`\`\`\n\n## User Prompt (~${approximateTokens(userPrompt)} tokens)\n\`\`\`\n${userPrompt}\n\`\`\``,
             },
           ],
           details: { config, transcriptStats: transcript.stats, details, policyCheck },
@@ -706,10 +724,9 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
       }
 
       const model = ctx.modelRegistry.find(config.provider, config.model)
-      const provider = ctx.modelRegistry.getProvider(config.provider)
-      if (!model || !provider) {
+      if (!model) {
         return {
-          content: [{ type: 'text', text: `Model/provider ${config.provider}/${config.model} not found` }],
+          content: [{ type: 'text', text: `Model ${config.provider}/${config.model} not found` }],
           details: {},
         }
       }
@@ -725,12 +742,9 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
         signal,
         timeoutMs: config.timeoutMs,
       }
-      if (auth.apiKey !== undefined) streamOpts.apiKey = auth.apiKey
-      if (auth.headers !== undefined) streamOpts.headers = auth.headers
-      if (auth.env !== undefined) streamOpts.env = auth.env
       if (model.reasoning && config.reasoning !== 'off') streamOpts.reasoning = config.reasoning as ThinkingLevel
 
-      const message = await callModel(provider, model, systemPrompt, userPrompt, streamOpts)
+      const message = await callModel(ctx.modelRegistry, model, systemPrompt, userPrompt, streamOpts)
       const text = responseText(message)
 
       let verdict: Record<string, unknown>
@@ -751,7 +765,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
         content: [
           {
             type: 'text',
-            text: `# Permissions Analyzer — LIVE CALL\n\nConfig: provider=${config.provider} model=${config.model}\n\n${policyLines}\n\n## Verdict\n\`\`\`json\n${JSON.stringify(verdict, null, 2)}\n\`\`\`\n\n## Scenario\n\`\`\`json\n${JSON.stringify(details, null, 2)}\n\`\`\``,
+            text: `# Permissions Analyzer — LIVE CALL\n\nEquivalent slash command: ${equivalentCommand('call', (params.scenario as Record<string, unknown> | undefined) ?? {})}\n\nConfig: provider=${config.provider} model=${config.model}\n\n${policyLines}\n\n## Verdict\n\`\`\`json\n${JSON.stringify(verdict, null, 2)}\n\`\`\`\n\n## Scenario\n\`\`\`json\n${JSON.stringify(details, null, 2)}\n\`\`\``,
           },
         ],
         details: { verdict, scenario: details, transcriptStats: transcript.stats, policyCheck },

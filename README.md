@@ -47,6 +47,12 @@ Requires `pi-permission-auto-review` to be installed and configured (the analyze
 /permissions-analyzer call --scenario {"command":"rm -rf /tmp/build","surface":"bash"}
 ```
 
+Every `dry`/`call` output starts with the **equivalent non-interactive slash command** for the scenario it just ran — copy it to re-run the same probe verbatim:
+
+```
+Equivalent: /permissions-analyzer dry --scenario {"command":"cat ~/.env","surface":"bash","toolName":"bash"}
+```
+
 ### Tool: `permissions_analyzer`
 
 The extension also registers an LLM-callable tool so the agent itself can run probes:
@@ -83,7 +89,42 @@ Key scenarios to probe:
 
 ## Config
 
-The analyzer reads your existing `pi-permission-auto-review` config. No separate configuration is needed.
+The analyzer reads your existing `pi-permission-auto-review` config. No separate configuration is needed for provider/model/policy.
+
+### Canned preset scenarios
+
+The preset list offered by the interactive scenario picker can be overridden in
+
+```
+$PI_CODING_AGENT_DIR/extensions/pi-permissions-analyzer.json   (default: ~/.pi/agent/extensions/pi-permissions-analyzer.json)
+```
+
+```json
+{
+  "presets": [
+    { "label": "🟢  git status", "command": "git status", "surface": "bash", "toolName": "bash" },
+    { "label": "🔴  push secrets", "overrides": { "command": "git push origin main", "surface": "bash", "toolName": "bash" } }
+  ]
+}
+```
+
+Each entry needs a `label` plus either an `overrides` object or shorthand keys
+(`command`, `surface`, `toolName`, …) that are treated as overrides. Entries
+missing a label are skipped; a missing/invalid file falls back to the built-in
+presets; an explicit `"presets": []` keeps only the custom builder and recent
+log entries. `/permissions-analyzer config` shows where the active preset list
+came from.
+
+## Compatibility
+
+As of 0.2.0 the analyzer targets the current stack: `@mzwing/pi-permission-auto-review`
+0.5.x, `@gotgenes/pi-permission-system` 33.x, and `@earendil-works/pi-ai`/
+`pi-coding-agent` 0.86.x (the peer set mirrors auto-review 0.5.0's own, and
+will widen as it tracks newer pi releases). Model calls go through
+`ModelRegistry.streamSimple` with raw `Context` + request-time auth — the same
+pattern auto-review itself uses as of 0.5.0. (Under pi-ai 0.86 the previous
+`provider.streamSimple` call would have silently dropped the system prompt, so
+older stacks should stay on analyzer 0.1.x.)
 
 ## Diagnostics
 

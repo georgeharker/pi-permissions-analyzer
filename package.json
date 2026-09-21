@@ -62,10 +62,10 @@
     "vitest": "^3.0.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.84.0",
-    "@earendil-works/pi-coding-agent": ">=0.84.0",
+    "@earendil-works/pi-ai": "^0.86.0",
+    "@earendil-works/pi-coding-agent": "^0.86.0",
     "@gotgenes/pi-permission-system": ">=27.0.0",
-    "@mzwing/pi-permission-auto-review": "^0.4.0",
+    "@mzwing/pi-permission-auto-review": "^0.5.0",
     "typebox": "^1.1.0"
   }
 }
