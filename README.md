@@ -25,7 +25,7 @@ Requires `pi-permission-auto-review` to be installed and configured (the analyze
 ```
 /permissions-analyzer dry                     — dump the system + user prompt without calling the model
 /permissions-analyzer call                    — call the model and show the verdict
-/permissions-analyzer call --scenario <json>  — override permission details with a custom scenario
+/permissions-analyzer call {"command":"ls"}   — override permission details with a scenario object
 ```
 
 #### Examples
@@ -38,19 +38,19 @@ Requires `pi-permission-auto-review` to be installed and configured (the analyze
 /permissions-analyzer call
 
 # Test your additionalPolicy against a specific command
-/permissions-analyzer call --scenario {"command":"cat ~/.cache/secrets/key","surface":"bash"}
+/permissions-analyzer call {"command":"cat ~/.cache/secrets/key","surface":"bash"}
 
 # Test env var reading (your "request clarification" rule)
-/permissions-analyzer call --scenario {"command":"echo $AWS_SECRET_ACCESS_KEY","surface":"bash"}
+/permissions-analyzer call {"command":"echo $AWS_SECRET_ACCESS_KEY","surface":"bash"}
 
 # Test a destructive operation
-/permissions-analyzer call --scenario {"command":"rm -rf /tmp/build","surface":"bash"}
+/permissions-analyzer call {"command":"rm -rf /tmp/build","surface":"bash"}
 ```
 
 Every `dry`/`call` output starts with the **equivalent non-interactive slash command** for the scenario it just ran — copy it to re-run the same probe verbatim:
 
 ```
-Equivalent: /permissions-analyzer dry --scenario {"command":"cat ~/.env","surface":"bash","toolName":"bash"}
+Equivalent: /permissions-analyzer dry {"command":"cat ~/.env","surface":"bash","toolName":"bash"}
 ```
 
 ### Tool: `permissions_analyzer`
@@ -69,7 +69,7 @@ The analyzer:
 
 1. Reads the auto-review config (`~/.pi/agent/extensions/pi-permission-auto-review/config.json` or project override) to get the same provider, model, reasoning, and policy the reviewer uses.
 2. Builds the transcript from the current session using the same rendering, truncation, and budget logic as `pi-permission-auto-review`'s `renderTranscript()`.
-3. Constructs the permission request JSON from a default scenario or the `--scenario` override.
+3. Constructs the permission request JSON from a default scenario or the positional scenario object.
 4. Calls `buildReviewPrompt()` to produce the exact system + user prompt pair.
 5. In `dry` mode, displays both prompts. In `call` mode, calls the model via `streamSimple` and parses the verdict with `parseReviewAssessment()`.
 

@@ -13,7 +13,7 @@
  *   /permissions-analyzer config           — show the active auto-review config
  *   /permissions-analyzer scenario [JSON]  — show/override the permission scenario
  *   /permissions-analyzer log [N]          — show last N review decisions + resolutions from the log
- *   /permissions-analyzer call --scenario <json>  — override permission details with a custom scenario
+ *   /permissions-analyzer call {"command":"..."}  — override permission details with a scenario object
  *
  * The analyzer reads your existing auto-review config, builds the real transcript
  * from the current session, queries the live permission system, and constructs
@@ -122,13 +122,31 @@ function responseText(message: AssistantMessage): string {
     .trim()
 }
 
-function parseScenarioArg(parts: string[]): Record<string, unknown> {
-  const idx = parts.indexOf('--scenario')
-  if (idx < 0 || !parts[idx + 1]) return {}
+/** Parse the positional scenario JSON from the raw args: everything after the
+ * subcommand, when it starts with '{', is the scenario object (pi's built-ins
+ * are positional — no -- flags). Returns {} when absent; `error` explains
+ * malformed input so the handler can notify instead of silently ignoring it. */
+function parseScenarioArg(args: string): { overrides: Record<string, unknown>; error: string | null } {
+  const trimmed = (args ?? '').trim()
+  const spaceIdx = trimmed.search(/\s/)
+  const rest = spaceIdx < 0 ? '' : trimmed.slice(spaceIdx).trim()
+  if (!rest.startsWith('{')) {
+    if (rest.startsWith('--')) {
+      return {
+        overrides: {},
+        error: '-- flags are not supported — pass the scenario JSON positionally: /permissions-analyzer <dry|call|scenario> {"command":"..."}',
+      }
+    }
+    return { overrides: {}, error: null }
+  }
   try {
-    return JSON.parse(parts.slice(idx + 1).join(' '))
-  } catch {
-    return {}
+    const parsed: unknown = JSON.parse(rest)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return { overrides: {}, error: 'scenario JSON must be an object, e.g. {"command":"cat ~/.env","surface":"bash"}' }
+    }
+    return { overrides: parsed as Record<string, unknown>, error: null }
+  } catch (e) {
+    return { overrides: {}, error: `invalid scenario JSON: ${e instanceof Error ? e.message : String(e)}` }
   }
 }
 
@@ -136,7 +154,7 @@ function parseScenarioArg(parts: string[]): Record<string, unknown> {
  * so any preset/custom/log construction can be re-run verbatim. */
 function equivalentCommand(subcommand: string, overrides: Record<string, unknown>): string {
   if (Object.keys(overrides).length === 0) return `/permissions-analyzer ${subcommand}`
-  return `/permissions-analyzer ${subcommand} --scenario ${JSON.stringify(overrides)}`
+  return `/permissions-analyzer ${subcommand} ${JSON.stringify(overrides)}`
 }
 
 const SURFACES = ['bash', 'read', 'write', 'edit', 'mcp', 'fetch', 'web']
@@ -372,8 +390,13 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
         ctx.ui.notify(`⚠ permissions-analyzer: ${startupWarnings.join('; ')}`, 'warning')
       }
 
-      // For dry/call, resolve the scenario: CLI --scenario > TUI picker > cancel
-      let scenarioOverrides = parseScenarioArg(parts)
+      // For dry/call, resolve the scenario: positional JSON > TUI picker > cancel
+      const parsed = parseScenarioArg(args ?? '')
+      if (parsed.error !== null) {
+        ctx.ui.notify(`permissions-analyzer: ${parsed.error}`, 'error')
+        return
+      }
+      let scenarioOverrides = parsed.overrides
       let scenarioSource = 'cli'
 
       if ((subcommand === 'dry' || subcommand === 'call') && Object.keys(scenarioOverrides).length === 0) {
@@ -405,7 +428,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
           `Config: provider=${config.provider} model=${config.model} reasoning=${config.reasoning}`,
           `Baseline policy: ${config.includeBaselinePolicy ? 'ON' : 'OFF'}`,
           `Additional policy: ${config.additionalPolicy ? 'YES' : 'none'}`,
-          `Scenario: ${scenarioSource === 'preset' ? 'preset' : scenarioSource === 'log' ? 'recent from log' : scenarioSource === 'cli' ? 'CLI --scenario' : 'default'}`,
+          `Scenario: ${scenarioSource === 'preset' ? 'preset' : scenarioSource === 'log' ? 'recent from log' : scenarioSource === 'cli' ? 'positional JSON' : 'default'}`,
           '',
           `Transcript: ${transcript.stats.transcriptEntriesRetained} retained, ${transcript.stats.transcriptEntriesOmitted} omitted, ${transcript.stats.transcriptEntriesTruncated} truncated`,
           `Latest trusted entry retained: ${transcript.stats.latestTrustedEntryRetained}`,
@@ -470,7 +493,7 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
             `Equivalent: ${equivalentCommand('call', scenarioOverrides)}`,
             '',
             `Config: provider=${config.provider} model=${config.model} reasoning=${config.reasoning}`,
-            `Scenario: ${scenarioSource === 'preset' ? 'preset' : scenarioSource === 'log' ? 'recent from log' : scenarioSource === 'cli' ? 'CLI --scenario' : 'default'}`,
+            `Scenario: ${scenarioSource === 'preset' ? 'preset' : scenarioSource === 'log' ? 'recent from log' : scenarioSource === 'cli' ? 'positional JSON' : 'default'}`,
             `Transcript: ${transcript.stats.transcriptEntriesRetained} retained, ${transcript.stats.transcriptEntriesOmitted} omitted`,
             '',
             ...formatPolicyCheck(policyCheck),
@@ -512,12 +535,11 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
           '  /permissions-analyzer scenario [JSON]  Show/override the permission scenario',
           '  /permissions-analyzer log [N]          Show last N review decisions + resolutions',
           '',
-          '─── OPTIONS ───',
+          '─── SCENARIO JSON ───',
           '',
-          '  --scenario {"command":"...","surface":"bash"}',
-          '    Override permission request fields for dry/call.',
-          '    Example:',
-          '      /permissions-analyzer call --scenario {"command":"cat ~/.cache/secrets/key"}',
+          '  Pass a scenario object positionally after dry/call/scenario:',
+          '    /permissions-analyzer call {"command":"cat ~/.cache/secrets/key"}',
+          '  Fields: command, surface, toolName, value, path, …',
           '',
           '─── CONFIG ───',
           '',
@@ -573,14 +595,19 @@ export default function permissionsAnalyzer(pi: ExtensionAPI): void {
       }
 
       if (subcommand === 'scenario') {
-        const overrides = parseScenarioArg(parts)
+        const parsed = parseScenarioArg(args ?? '')
+        if (parsed.error !== null) {
+          ctx.ui.notify(`permissions-analyzer: ${parsed.error}`, 'error')
+          return
+        }
+        const overrides = parsed.overrides
         const scenario = buildDetails(overrides)
         const output = [
           '╔══════════════════════════════════════════════════════╗',
           '║  PERMISSIONS ANALYZER — SCENARIO                     ║',
           '╚══════════════════════════════════════════════════════╝',
           '',
-          '  Default scenario with any --scenario overrides applied:',
+          '  Default scenario with any positional JSON overrides applied:',
           '',
           ...JSON.stringify(scenario, null, 2).split('\n').map(l => '  ' + l),
           '',
