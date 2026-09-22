@@ -9,48 +9,84 @@ The auto-review extension sends a carefully constructed prompt (system policy + 
 1. **Dry run** — build the exact prompt the classifier would receive and inspect it, without calling any model (zero cost).
 2. **Live call** — send that prompt to the configured reviewer model and see the verdict.
 3. **Custom scenarios** — override the permission request fields to test specific commands, paths, or surfaces against your `additionalPolicy` rules.
+4. **Log viewer** — inspect the permission review log to see real decisions and resolutions.
 
 ## Install
+
+### As a pi package (recommended)
+
+Add to `~/.config/pi/agent/settings.json`:
+
+```json
+{
+  "packages": [
+    "npm:@geohar/pi-permissions-analyzer"
+  ]
+}
+```
+
+Or use the CLI:
 
 ```bash
 pi install npm:@geohar/pi-permissions-analyzer
 ```
 
-Requires `pi-permission-auto-review` to be installed and configured (the analyzer reads its config).
+### Prerequisites
+
+- **`@gotgenes/pi-permission-system`** — must be installed and running for deterministic rule checks (the analyzer listens for `permissions:ready`)
+- **`@mzwing/pi-permission-auto-review`** — must be installed and configured (the analyzer reads its config at `~/.config/pi/agent/extensions/pi-permission-auto-review/config.json`)
+
+If either is missing, the analyzer warns when you first run a command.
 
 ## Usage
 
 ### Command: `/permissions-analyzer`
 
 ```
-/permissions-analyzer dry                     — dump the system + user prompt without calling the model
-/permissions-analyzer call                    — call the model and show the verdict
-/permissions-analyzer call {"command":"ls"}   — override permission details with a scenario object
+/permissions-analyzer                  Show help
+/permissions-analyzer help             Show help
+/permissions-analyzer dry              Build prompt + policy check (no model call)
+/permissions-analyzer call             Call the reviewer model and show verdict
+/permissions-analyzer config           Show the active auto-review config
+/permissions-analyzer scenario [JSON]  Show/override the permission scenario
+/permissions-analyzer log [N]          Show last N review decisions + resolutions
+```
+
+When you run `dry` or `call` without `--scenario`, an interactive TUI picker opens with preset scenarios and recent log entries. Select **✏️ Custom…** to build a scenario field by field.
+
+#### Options
+
+```
+--scenario {"command":"...","surface":"bash"}
+  Override permission request fields for dry/call.
 ```
 
 #### Examples
 
 ```bash
-# Dry run: inspect what the classifier would see
+# Dry run with interactive scenario picker
 /permissions-analyzer dry
 
-# Live call: get a real verdict from the configured model
+# Live call with interactive scenario picker
 /permissions-analyzer call
 
 # Test your additionalPolicy against a specific command
-/permissions-analyzer call {"command":"cat ~/.cache/secrets/key","surface":"bash"}
+/permissions-analyzer call --scenario {"command":"cat ~/.cache/secrets/key"}
 
-# Test env var reading (your "request clarification" rule)
-/permissions-analyzer call {"command":"echo $AWS_SECRET_ACCESS_KEY","surface":"bash"}
+# Test env var reading
+/permissions-analyzer call --scenario {"command":"echo $AWS_SECRET_ACCESS_KEY","surface":"bash"}
 
 # Test a destructive operation
-/permissions-analyzer call {"command":"rm -rf /tmp/build","surface":"bash"}
-```
+/permissions-analyzer call --scenario {"command":"rm -rf /tmp/build","surface":"bash"}
 
-Every `dry`/`call` output starts with the **equivalent non-interactive slash command** for the scenario it just ran — copy it to re-run the same probe verbatim:
+# Inspect the review log
+/permissions-analyzer log
 
-```
-Equivalent: /permissions-analyzer dry {"command":"cat ~/.env","surface":"bash","toolName":"bash"}
+# Show more log entries
+/permissions-analyzer log 50
+
+# Show active config
+/permissions-analyzer config
 ```
 
 ### Tool: `permissions_analyzer`
@@ -67,13 +103,14 @@ permissions_analyzer(mode="call", scenario={"command":"cat ~/.cache/secrets/key"
 
 The analyzer:
 
-1. Reads the auto-review config (`~/.pi/agent/extensions/pi-permission-auto-review/config.json` or project override) to get the same provider, model, reasoning, and policy the reviewer uses.
-2. Builds the transcript from the current session using the same rendering, truncation, and budget logic as `pi-permission-auto-review`'s `renderTranscript()`.
-3. Constructs the permission request JSON from a default scenario or the positional scenario object.
+1. Reads the auto-review config to get the same provider, model, reasoning, and policy the reviewer uses.
+2. Builds the transcript from the current session using `renderTranscript()` from `@mzwing/pi-permission-auto-review/review`.
+3. Constructs the permission request JSON from the selected scenario.
 4. Calls `buildReviewPrompt()` to produce the exact system + user prompt pair.
-5. In `dry` mode, displays both prompts. In `call` mode, calls the model via `streamSimple` and parses the verdict with `parseReviewAssessment()`.
+5. In `dry` mode, displays both prompts. In `call` mode, calls the model and parses the verdict with `parseReviewAssessment()`.
+6. Queries `@gotgenes/pi-permission-system` to show what the deterministic rules say, so you know if the authorizer chain even gets a chance to run.
 
-The transcript and prompt construction is inlined from `pi-permission-auto-review`'s source rather than imported, because the installed package isn't guaranteed resolvable from the extension loader at development time and we only need the prompt-construction path (not the runtime authorizer).
+All prompt/transcript/verdict logic is imported directly from `@mzwing/pi-permission-auto-review/review` (as of v0.1.9) — no inlined copies, no drift risk.
 
 ## Testing your additionalPolicy
 
@@ -115,17 +152,6 @@ presets; an explicit `"presets": []` keeps only the custom builder and recent
 log entries. `/permissions-analyzer config` shows where the active preset list
 came from.
 
-## Compatibility
-
-As of 0.2.0 the analyzer targets the current stack: `@mzwing/pi-permission-auto-review`
-0.5.x, `@gotgenes/pi-permission-system` 33.x, and `@earendil-works/pi-ai`/
-`pi-coding-agent` 0.86.x (the peer set mirrors auto-review 0.5.0's own, and
-will widen as it tracks newer pi releases). Model calls go through
-`ModelRegistry.streamSimple` with raw `Context` + request-time auth — the same
-pattern auto-review itself uses as of 0.5.0. (Under pi-ai 0.86 the previous
-`provider.streamSimple` call would have silently dropped the system prompt, so
-older stacks should stay on analyzer 0.1.x.)
-
 ## Diagnostics
 
 When `pi-permission-system`'s permission review log is enabled, real auto-review decisions are recorded at:
@@ -135,6 +161,8 @@ When `pi-permission-system`'s permission review log is enabled, real auto-review
 ```
 
 Look for `auto_review.decision` entries with `outcome`, `riskLevel`, and `userAuthorization` to validate end-to-end that your `additionalPolicy` rules are being enforced.
+
+Use `/permissions-analyzer log` to browse this log interactively.
 
 ## Development
 
